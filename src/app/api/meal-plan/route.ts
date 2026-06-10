@@ -2,7 +2,24 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 import type { FamilyProfile } from "@/app/page";
 
+export const maxDuration = 120; // seconds — override Next.js default 30s limit
+
 const client = new Anthropic();
+
+const MOCK_PLAN = {
+  days: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day) => ({
+    day,
+    breakfast: { name: "Rolled oats with banana", note: "Low GI, filling", cost: 2, memberNotes: {} },
+    lunch: { name: "Chicken & salad wrap", note: "Wholegrain wrap", cost: 5, memberNotes: {} },
+    dinner: { name: "Beef stir-fry with rice", note: "Lean beef, plenty of veg", cost: 7, memberNotes: {} },
+  })),
+  shopping: [
+    { store: "Woolworths", items: 22, est: 65, savings: 18, keyItems: ["oats", "chicken", "rice", "salad"] },
+    { store: "ALDI", items: 14, est: 38, savings: 12, keyItems: ["beef mince", "frozen veg", "wraps"] },
+  ],
+  weeklyTotal: 103,
+  nutritionHighlight: "Mock plan — set MOCK_MEAL_PLAN= (empty) in .env.local to use real AI.",
+};
 
 export async function POST(req: NextRequest) {
   const profile: FamilyProfile = await req.json();
@@ -73,6 +90,10 @@ Respond ONLY with a valid JSON object in this exact structure (no markdown, no e
   "weeklyTotal": number,
   "nutritionHighlight": "string — one sentence summarising how the plan meets all dietary needs"
 }`;
+
+  if (process.env.MOCK_MEAL_PLAN === "true") {
+    return NextResponse.json(MOCK_PLAN);
+  }
 
   try {
     const message = await client.messages.create({
