@@ -65,7 +65,7 @@ const MOCK_PLAN = {
     { store: "ALDI", items: 14, est: 38, savings: 12, keyItems: ["frozen veg", "wraps", "rice"] },
   ],
   weeklyTotal: 103,
-  nutritionHighlight: "Mock plan — set MOCK_MEAL_PLAN=true in .env.local to enable this mode, or leave unset for live AI.",
+"Preview plan — add ANTHROPIC_API_KEY to .env.local for live AI-generated plans."
   planMeta: {
     planSource: "ai" as const,
     authorityLevel: "flexible" as const,
@@ -77,7 +77,8 @@ const MOCK_PLAN = {
 export async function POST(req: NextRequest) {
   const profile: FamilyProfile = await req.json();
 
-  if (process.env.MOCK_MEAL_PLAN === "true") {
+ // Fall back to mock if no API key or mock mode explicitly enabled
+if (process.env.MOCK_MEAL_PLAN === "true" || !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(MOCK_PLAN);
   }
 
