@@ -2,68 +2,166 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
 import type { FamilyProfile } from "@/app/page";
 
-export const maxDuration = 120; // seconds — override Next.js default 30s limit
+export const maxDuration = 120; // override Next.js default 30s limit
 
 const client = new Anthropic();
 
+// Typed to match MealServingMode in MealPlanView
+type MealServingMode =
+  | "shared"
+  | "shared-base-split-protein"
+  | "split-components"
+  | "parallel"
+  | "separate";
+
+type MemberVariant = {
+  memberName: string;
+  variant: string;
+  preparationNote?: string | null;
+};
+
+type MockMeal = {
+  name: string;
+  note: string;
+  cost: number;
+  mealServingMode: MealServingMode;
+  memberVariants: MemberVariant[];
+};
+
+type MockDay = {
+  day: string;
+  breakfast: MockMeal;
+  lunch: MockMeal;
+  dinner: MockMeal;
+};
+
 const MOCK_PLAN = {
-  days: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day) => ({
+  days: ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map((day): MockDay => ({
     day,
-    breakfast: { name: "Rolled oats with banana", note: "Low GI, filling", cost: 2, memberNotes: {} },
-    lunch: { name: "Chicken & salad wrap", note: "Wholegrain wrap", cost: 5, memberNotes: {} },
-    dinner: { name: "Beef stir-fry with rice", note: "Lean beef, plenty of veg", cost: 7, memberNotes: {} },
+    breakfast: {
+      name: "Rolled oats with banana and honey",
+      note: "Low GI, filling — suits most dietary needs",
+      cost: 2,
+      mealServingMode: "shared",
+      memberVariants: [],
+    },
+    lunch: {
+      name: "Chicken & salad wrap (GF wrap available)",
+      note: "Wholegrain or gluten-free wrap depending on needs",
+      cost: 5,
+      mealServingMode: "split-components",
+      memberVariants: [],
+    },
+    dinner: {
+      name: "Roast vegetables with protein of choice",
+      note: "Shared roast veg base — protein split per household needs",
+      cost: 7,
+      mealServingMode: "shared-base-split-protein",
+      memberVariants: [],
+    },
   })),
   shopping: [
-    { store: "Woolworths", items: 22, est: 65, savings: 18, keyItems: ["oats", "chicken", "rice", "salad"] },
-    { store: "ALDI", items: 14, est: 38, savings: 12, keyItems: ["beef mince", "frozen veg", "wraps"] },
+    { store: "Woolworths", items: 22, est: 65, savings: 18, keyItems: ["oats", "chicken", "salad", "honey"] },
+    { store: "ALDI", items: 14, est: 38, savings: 12, keyItems: ["frozen veg", "wraps", "rice"] },
   ],
   weeklyTotal: 103,
-  nutritionHighlight: "Mock plan — set MOCK_MEAL_PLAN= (empty) in .env.local to use real AI.",
+  nutritionHighlight: "Mock plan — set MOCK_MEAL_PLAN=true in .env.local to enable this mode, or leave unset for live AI.",
+  planMeta: {
+    planSource: "ai" as const,
+    authorityLevel: "flexible" as const,
+    generatedAt: new Date().toISOString(),
+    auditTrail: ["Mock mode active — no real AI call was made"],
+  },
 };
 
 export async function POST(req: NextRequest) {
   const profile: FamilyProfile = await req.json();
 
+  if (process.env.MOCK_MEAL_PLAN === "true") {
+    return NextResponse.json(MOCK_PLAN);
+  }
+
+  // Build per-member context including which dietary rules are safety-level
   const memberSummaries = profile.members.map((m) => {
     const needsStr = m.needs.length > 0 && !m.needs.includes("none")
       ? m.needs.join(", ")
       : "no specific dietary needs";
-    return `- ${m.name} (${m.role}${m.age ? `, age ${m.age}` : ""}): ${needsStr}`;
+    const days = m.attendanceDays && m.attendanceDays.length > 0
+      ? ` — eats at home on: ${m.attendanceDays.join(", ")}`
+      : "";
+    const profNotes = m.professionalNotes ? ` | Professional note: ${m.professionalNotes}` : "";
+    const iddsi = m.iddsiLevel !== undefined
+      ? ` | IDDSI Level ${m.iddsiLevel} texture-modified meals required`
+      : "";
+    return `- ${m.name} (${m.role}${m.age ? `, age ${m.age}` : ""}): ${needsStr}${days}${iddsi}${profNotes}`;
   }).join("\n");
 
-  const prompt = `You are a professional family nutritionist creating a real, practical 7-day meal plan for an Australian family.
+  // Identify which members have meat-free requirements (for split logic)
+  const vegetarianMembers = profile.members
+    .filter((m) => m.needs.includes("vegetarian") || m.needs.includes("vegan"))
+    .map((m) => m.name);
 
-Family: ${profile.householdName || "the family"}
-Weekly budget: AUD $${profile.weeklyBudget}${profile.budgetFlexible ? " (flexible)" : ""}
+  const hasVegetarianAndNonVegetarian =
+    vegetarianMembers.length > 0 &&
+    vegetarianMembers.length < profile.members.length;
 
-Family members and their dietary needs:
+  const splitNote = hasVegetarianAndNonVegetarian
+    ? `\nIMPORTANT: This household has both vegetarian/vegan members (${vegetarianMembers.join(", ")}) AND members who eat meat. Do NOT plan meat-free dinners for everyone just because some members are vegetarian. Instead, use mealServingMode "shared-base-split-protein" or "split-components" — e.g. shared roast vegetables, with meat cooked separately for those who eat it, and a vegetarian protein (legumes, tofu, halloumi, eggs) cooked separately for ${vegetarianMembers.join(", ")}. Plate guidance must ensure ${vegetarianMembers.join(", ")} never receives meat or meat-based gravy/stock.`
+    : "";
+
+  const prompt = `You are a professional family nutritionist and meal planning specialist.
+Create a real, practical 7-day meal plan for an Australian household.
+
+HOUSEHOLD: ${profile.householdName || "the family"}
+Weekly food budget: AUD $${profile.weeklyBudget}${profile.budgetFlexible ? " (flexible)" : " (strict)"}
+
+HOUSEHOLD MEMBERS:
 ${memberSummaries}
+${splitNote}
 
-Generate a complete 7-day meal plan. For EACH day (Monday through Sunday), provide breakfast, lunch, and dinner.
+CORE PLANNING PRINCIPLE:
+Plan at household level — find the most practical shared approach — but serve at person/plate level.
+For each meal, choose the most appropriate serving mode:
+- "shared" — everyone eats the same thing (use when safe and practical)
+- "shared-base-split-protein" — shared base (e.g. roast veg, pasta, rice) with different protein for different people
+- "split-components" — same ingredients, plated/prepared differently (e.g. texture-modified, deconstructed)
+- "parallel" — different dishes cooked in parallel (use when needs genuinely cannot be combined)
+- "separate" — fully separate meals (only when there is no practical shared component)
 
-CRITICAL dietary rules — these are MEDICAL requirements, not preferences:
-- IDDSI/texture-modified: Food must be pureed or at the correct IDDSI level. Note this on every meal for that person.
-- PEG feeding/nutrition drinks: Include the feeding schedule alongside regular meals for others.
+Do not default every meal to "separate" — find shared components wherever safe and practical.
+Do not apply one person's restriction to the whole household unless it is a genuine household choice.
+
+DIETARY SAFETY RULES — these are non-negotiable:
+- IDDSI/texture-modified: Food MUST be at the correct IDDSI level for that person. Note in memberVariants.
+- PEG feeding/nutrition drinks: Include feeding schedule alongside regular meals for others.
 - Diabetic-friendly: Low GI, controlled carbs, no added sugar.
 - FODMAP: No onion, garlic, wheat, most dairy, high-fructose fruits.
-- Vegan: Absolutely no animal products.
+- Vegan: Absolutely no animal products — not even stock, gelatin, or dairy.
 - Vegetarian: No meat or fish.
-- Gluten-free: No wheat, barley, rye — note GF alternatives.
+- Gluten-free: No wheat, barley, or rye — note GF alternatives.
 - Halal/Kosher: Follow requirements strictly.
-- High calcium/osteoporosis: Include calcium-rich foods at each meal.
+- High calcium/osteoporosis: Include calcium-rich foods at each meal for that person.
 - Low-sensory: Plain, mild flavours, consistent textures, no strong smells.
+- Food allergies: Treat as safety-level constraints.
 
-COST: Estimate realistic AUD per-serve costs. Budget of $${profile.weeklyBudget}/week feeds ${profile.members.length} person(s).
+COST: Estimate realistic AUD per-serve costs. Budget: $${profile.weeklyBudget}/week for ${profile.members.length} person(s).
+Cost must not override allergies, safety needs, clinician-set instructions, cultural/religious requirements,
+vegetarian/vegan requirements, sensory needs, or IDDSI/texture needs.
 
-For the shopping list, split across:
-1. Woolworths (pantry staples, produce, dairy)
+SHOPPING LIST: Split intelligently across:
+1. Woolworths (pantry staples, produce, dairy, specialty items)
 2. ALDI (bulk items, frozen, cheaper alternatives)
-3. Local butcher (if meat-eaters)
-4. Specialty/health food (if FODMAP, gluten-free, nutrition drinks etc.)
+3. Local butcher (if any members eat meat)
+4. Specialty/health food (if FODMAP, GF, nutrition drinks, etc.)
 
-For each member with IDDSI or complex needs, add a short "preparation note" on their meals.
+MEMBER VARIANTS: For each member who needs a plate adaptation (different preparation, different protein,
+texture-modified version, supplement alongside, etc.), include a memberVariants entry.
+If a member eats the same as everyone else without adaptation, do not include them in memberVariants.
 
-Respond ONLY with a valid JSON object in this exact structure (no markdown, no explanation):
+AUDIT TRAIL: Include 3–6 short sentences describing the main decisions you made in planning this week
+(e.g. which needs drove which choices, how you handled conflicts, which meals use split proteins).
+
+Respond ONLY with a valid JSON object in this exact structure (no markdown, no code fences, no explanation):
 {
   "days": [
     {
@@ -72,7 +170,14 @@ Respond ONLY with a valid JSON object in this exact structure (no markdown, no e
         "name": "string",
         "note": "string or null",
         "cost": number,
-        "memberNotes": {"MemberName": "preparation note or null"}
+        "mealServingMode": "shared|shared-base-split-protein|split-components|parallel|separate",
+        "memberVariants": [
+          {
+            "memberName": "string",
+            "variant": "string — what is different for this person",
+            "preparationNote": "string or null — specific prep instruction"
+          }
+        ]
       },
       "lunch": { same structure },
       "dinner": { same structure }
@@ -84,43 +189,51 @@ Respond ONLY with a valid JSON object in this exact structure (no markdown, no e
       "items": number,
       "est": number,
       "savings": number,
-      "keyItems": ["string", "string", "string"]
+      "keyItems": ["string"]
     }
   ],
   "weeklyTotal": number,
-  "nutritionHighlight": "string — one sentence summarising how the plan meets all dietary needs"
-}`;
-
-  if (process.env.MOCK_MEAL_PLAN === "true") {
-    return NextResponse.json(MOCK_PLAN);
+  "nutritionHighlight": "One sentence summarising how this plan meets every person's needs",
+  "planMeta": {
+    "planSource": "ai",
+    "authorityLevel": "flexible",
+    "generatedAt": "ISO 8601 date string",
+    "auditTrail": ["string", "string", "string"]
   }
+}`;
 
   try {
     const message = await client.messages.create({
       model: "claude-opus-4-8",
-      max_tokens: 4096,
-      thinking: { type: "adaptive" },
+      max_tokens: 8000,
+      thinking: { type: "enabled", budget_tokens: 3000 },
       messages: [{ role: "user", content: prompt }],
     });
 
     const textBlock = message.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json({ error: "No response from AI" }, { status: 500 });
+      return NextResponse.json({ error: "No text response from AI" }, { status: 500 });
     }
 
-    // Strip any accidental markdown fences
-    const raw = textBlock.text.trim().replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+    const raw = textBlock.text
+      .trim()
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
 
-    let plan;
+    let plan: unknown;
     try {
       plan = JSON.parse(raw);
     } catch {
-      return NextResponse.json({ error: "Invalid AI response format", raw }, { status: 500 });
+      console.error("Meal plan JSON parse error. Raw response:", raw.slice(0, 500));
+      return NextResponse.json({ error: "AI returned an unreadable format — please try again" }, { status: 500 });
     }
 
     return NextResponse.json(plan);
-  } catch (err) {
-    console.error("Meal plan API error:", err);
-    return NextResponse.json({ error: "Failed to generate meal plan" }, { status: 500 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("Meal plan API error:", message);
+    return NextResponse.json({ error: "Failed to generate meal plan. Please try again." }, { status: 500 });
   }
 }
