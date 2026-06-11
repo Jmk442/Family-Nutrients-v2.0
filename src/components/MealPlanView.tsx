@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import type { FamilyProfile } from "@/app/page";
+import type { FamilyProfile, PlanSource, AuthorityLevel } from "@/app/page";
 
 type Props = {
   profile: FamilyProfile;
@@ -11,10 +11,29 @@ type Props = {
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+// How a meal is served across household members
+// Used to show appropriate preparation notes and plate instructions
+export type MealServingMode =
+  | "shared"                    // Everyone eats the same thing
+  | "shared-base-split-protein" // Same base (e.g. roast veg), different protein
+  | "split-components"          // Same ingredients, plated differently (e.g. texture-modified)
+  | "parallel"                  // Different dishes cooked at the same time
+  | "separate";                 // Fully separate meals required
+
+// Per-member plate variation — typed replacement for loose memberNotes
+type MemberVariant = {
+  memberName: string;
+  variant: string;
+  preparationNote?: string | null;
+};
+
 type Meal = {
   name: string;
   note?: string | null;
   cost: number;
+  mealServingMode?: MealServingMode;
+  memberVariants?: MemberVariant[];
+  // Legacy field from Session 2 — still accepted so existing cached plans render
   memberNotes?: Record<string, string | null>;
 };
 
@@ -33,12 +52,42 @@ type StoreEntry = {
   keyItems?: string[];
 };
 
+// Plan-level provenance metadata
+type PlanMeta = {
+  planSource: PlanSource;
+  authorityLevel: AuthorityLevel;
+  generatedAt?: string;
+  auditTrail?: string[];
+};
+
 type AIPlan = {
   days: DayPlan[];
   shopping: StoreEntry[];
   weeklyTotal: number;
   nutritionHighlight?: string;
+  planMeta?: PlanMeta;
 };
+
+// Human-readable labels for serving modes
+const SERVING_MODE_LABELS: Record<MealServingMode, string> = {
+  "shared": "Shared meal",
+  "shared-base-split-protein": "Split proteins",
+  "split-components": "Split components",
+  "parallel": "Parallel dishes",
+  "separate": "Separate meals",
+};
+
+function ServingModeBadge({ mode }: { mode: MealServingMode }) {
+  if (mode === "shared") return null;
+  return (
+    <span
+      className="text-xs px-2 py-0.5 rounded-full font-medium"
+      style={{ background: "#fef3c7", color: "#92400e" }}
+    >
+      {SERVING_MODE_LABELS[mode]}
+    </span>
+  );
+}
 
 function LoadingSpinner() {
   return (
@@ -53,7 +102,7 @@ function LoadingSpinner() {
         Building your family&apos;s plan
       </h2>
       <p className="text-sm" style={{ color: "#6b6b6b" }}>
-        Our AI is thinking through every dietary need…
+        Thinking through every dietary need, every person&hellip;
       </p>
       <div className="mt-6 flex gap-1.5">
         {[0, 1, 2].map((i) => (
@@ -94,6 +143,20 @@ function ErrorView({ message, onRetry }: { message: string; onRetry: () => void 
   );
 }
 
+// Merge legacy memberNotes into the typed MemberVariant format so the UI
+// only has one code path to render member-level adaptations.
+function normaliseMemberVariants(meal: Meal): MemberVariant[] {
+  if (meal.memberVariants && meal.memberVariants.length > 0) {
+    return meal.memberVariants;
+  }
+  if (meal.memberNotes) {
+    return Object.entries(meal.memberNotes)
+      .filter(([, v]) => v)
+      .map(([name, note]) => ({ memberName: name, variant: note ?? "" }));
+  }
+  return [];
+}
+
 export default function MealPlanView({ profile, onBack }: Props) {
   const [tab, setTab] = useState<"meals" | "shopping">("meals");
   const [selectedDay, setSelectedDay] = useState(0);
@@ -111,10 +174,10 @@ export default function MealPlanView({ profile, onBack }: Props) {
         body: JSON.stringify(profile),
       });
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Request failed (${res.status})`);
+        const errData = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(errData.error ?? `Request failed (${res.status})`);
       }
-      const data: AIPlan = await res.json();
+      const data = await res.json() as AIPlan;
       setPlan(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -123,15 +186,23 @@ export default function MealPlanView({ profile, onBack }: Props) {
     }
   };
 
+  // Load plan on mount. The IIFE keeps all setState calls inside async callbacks
+  // so they never run synchronously within the effect body.
   useEffect(() => {
-    fetchPlan();
+    void (async () => { await fetchPlan(); })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const totalSavings = plan?.shopping.reduce((a, s) => a + s.savings, 0) ?? 0;
-  const totalSpend = plan?.shopping.reduce((a, s) => a + s.est, 0) ?? plan?.weeklyTotal ?? 0;
+  const totalSavings = plan?.shopping.reduce((acc: number, s: StoreEntry) => acc + s.savings, 0) ?? 0;
+  const totalSpend = plan?.shopping.reduce((acc: number, s: StoreEntry) => acc + s.est, 0) ?? plan?.weeklyTotal ?? 0;
 
   const dayPlan = plan?.days[selectedDay];
+
+  // Members who are attending on the selected day
+  const attendingMembers = profile.members.filter((m) => {
+    if (!m.attendanceDays || m.attendanceDays.length === 0) return true;
+    return m.attendanceDays.includes(DAYS[selectedDay]);
+  });
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#faf8f4" }}>
@@ -153,7 +224,7 @@ export default function MealPlanView({ profile, onBack }: Props) {
             className="text-xs px-3 py-1 rounded-full font-medium"
             style={{ background: "rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.9)" }}
           >
-            Week of 7 Jun
+            7-day plan
           </span>
         </div>
         <h1 className="text-2xl font-bold text-white">
@@ -162,6 +233,14 @@ export default function MealPlanView({ profile, onBack }: Props) {
         <p className="mt-1 text-sm" style={{ color: "rgba(255,255,255,0.72)" }}>
           {profile.members.length} {profile.members.length === 1 ? "person" : "people"} · Budget ${profile.weeklyBudget}/week
         </p>
+
+        {/* Plan source indicator */}
+        {plan?.planMeta && (
+          <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.5)" }}>
+            {plan.planMeta.planSource === "ai" ? "AI-generated · " : ""}
+            {plan.planMeta.authorityLevel === "flexible" ? "Flexible plan" : plan.planMeta.authorityLevel}
+          </p>
+        )}
 
         {/* Tab switcher */}
         <div
@@ -209,6 +288,25 @@ export default function MealPlanView({ profile, onBack }: Props) {
                   </div>
                 )}
 
+                {/* Audit trail — collapsed, for transparency */}
+                {plan.planMeta?.auditTrail && plan.planMeta.auditTrail.length > 0 && (
+                  <details className="mb-4">
+                    <summary
+                      className="text-xs cursor-pointer font-medium"
+                      style={{ color: "#6b6b6b" }}
+                    >
+                      How this plan was built ({plan.planMeta.auditTrail.length} decisions)
+                    </summary>
+                    <ul className="mt-2 space-y-1 pl-3">
+                      {plan.planMeta.auditTrail.map((entry, i) => (
+                        <li key={i} className="text-xs" style={{ color: "#6b6b6b" }}>
+                          · {entry}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+
                 {/* Day selector */}
                 <div className="flex gap-2 overflow-x-auto pb-2 mb-6 -mx-1 px-1">
                   {DAY_SHORT.map((day, i) => (
@@ -235,9 +333,10 @@ export default function MealPlanView({ profile, onBack }: Props) {
                       const meal = dayPlan[mealType];
                       const icons = { breakfast: "☀️", lunch: "🌤", dinner: "🌙" };
                       const labels = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner" };
-                      const memberNotesEntries = Object.entries(meal.memberNotes ?? {}).filter(
-                        ([, v]) => v
-                      );
+                      const variants = normaliseMemberVariants(meal);
+                      // Members who have a specific variant listed
+                      const variantMemberNames = new Set(variants.map((v) => v.memberName));
+
                       return (
                         <div
                           key={mealType}
@@ -250,6 +349,9 @@ export default function MealPlanView({ profile, onBack }: Props) {
                               <span className="text-sm font-medium" style={{ color: "#6b6b6b" }}>
                                 {labels[mealType]}
                               </span>
+                              {meal.mealServingMode && (
+                                <ServingModeBadge mode={meal.mealServingMode} />
+                              )}
                             </div>
                             <span className="text-sm font-medium" style={{ color: "#1a6b55" }}>
                               ~${meal.cost.toFixed(0)}
@@ -262,28 +364,44 @@ export default function MealPlanView({ profile, onBack }: Props) {
                             </p>
                           )}
 
-                          {/* Per-member preparation notes for complex dietary needs */}
-                          {memberNotesEntries.length > 0 && (
-                            <div className="mt-3 space-y-1">
-                              {memberNotesEntries.map(([name, note]) => (
-                                <p key={name} className="text-xs px-2.5 py-1.5 rounded-xl" style={{ background: "#faf0e0", color: "#7a5500" }}>
-                                  <strong>{name}:</strong> {note}
-                                </p>
+                          {/* Per-member plate variations */}
+                          {variants.length > 0 && (
+                            <div className="mt-3 space-y-1.5">
+                              {variants.map((v) => (
+                                <div
+                                  key={v.memberName}
+                                  className="text-xs px-3 py-2 rounded-xl"
+                                  style={{ background: "#faf0e0", color: "#7a5500" }}
+                                >
+                                  <span className="font-semibold">{v.memberName}:</span>{" "}
+                                  {v.variant}
+                                  {v.preparationNote && (
+                                    <span className="block mt-0.5 opacity-75">
+                                      Prep: {v.preparationNote}
+                                    </span>
+                                  )}
+                                </div>
                               ))}
                             </div>
                           )}
 
-                          {/* Member badges */}
+                          {/* Member attendance badges */}
                           <div className="mt-3 flex flex-wrap gap-2">
-                            {profile.members.map((m) => (
-                              <span
-                                key={m.id}
-                                className="text-xs px-2.5 py-1 rounded-full font-medium"
-                                style={{ background: "#d4e9e2", color: "#0d5c48" }}
-                              >
-                                ✓ {m.name}
-                              </span>
-                            ))}
+                            {attendingMembers.map((m) => {
+                              const hasVariant = variantMemberNames.has(m.name);
+                              return (
+                                <span
+                                  key={m.id}
+                                  className="text-xs px-2.5 py-1 rounded-full font-medium"
+                                  style={{
+                                    background: hasVariant ? "#fef3c7" : "#d4e9e2",
+                                    color: hasVariant ? "#92400e" : "#0d5c48",
+                                  }}
+                                >
+                                  {hasVariant ? "⚑" : "✓"} {m.name}
+                                </span>
+                              );
+                            })}
                           </div>
                         </div>
                       );
@@ -410,6 +528,16 @@ export default function MealPlanView({ profile, onBack }: Props) {
             )}
           </>
         )}
+      </div>
+
+      {/* Safety disclaimer — persistent footer */}
+      <div
+        className="px-6 py-3 text-center"
+        style={{ borderTop: "1px solid #e8e2d8" }}
+      >
+        <p className="text-xs" style={{ color: "#9b9b9b" }}>
+          This app does not diagnose. It does not replace dietitians, clinicians, support coordinators, or plan managers. It supports organisation and documentation of agreed routines.
+        </p>
       </div>
     </div>
   );

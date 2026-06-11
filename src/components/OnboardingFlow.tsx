@@ -15,12 +15,13 @@ const DIETARY_NEEDS = [
   { id: "diabetic", label: "Diabetic-friendly", icon: "🩺" },
   { id: "osteoporosis", label: "High calcium (osteoporosis)", icon: "🦴" },
   { id: "lowsensory", label: "Low-sensory foods", icon: "🤲" },
-  { id: "texturemodfied", label: "Texture-modified / IDDSI", icon: "🥣" },
+  { id: "texturemodified", label: "Texture-modified / IDDSI", icon: "🥣" },
   { id: "nutdrinks", label: "Nutrition drinks / PEG", icon: "🧃" },
   { id: "glutenfree", label: "Gluten free", icon: "🌾" },
   { id: "dairyfree", label: "Dairy free", icon: "🥛" },
   { id: "halal", label: "Halal", icon: "☪️" },
   { id: "kosher", label: "Kosher", icon: "✡️" },
+  { id: "culturalfoodcalendar", label: "Cultural food calendar", icon: "📅" },
   { id: "allergies", label: "Food allergies", icon: "⚠️" },
   { id: "none", label: "No specific needs", icon: "✅" },
 ];
@@ -30,6 +31,25 @@ const ROLES = [
   { id: "child", label: "Child", icon: "🧒" },
   { id: "grandparent", label: "Grandparent", icon: "👴" },
   { id: "other", label: "Other", icon: "👤" },
+];
+
+const WEEK_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// Needs that trigger the attendance question (some members may not eat at home every day)
+const COMPLEX_NEEDS = ["texturemodified", "nutdrinks", "fodmap", "diabetic", "allergies"];
+
+// IDDSI levels 0–7 (International Dysphagia Diet Standardisation Initiative)
+// Stage 1: display/prompt hint only. Stage 2: clinician-locked enforcement.
+const IDDSI_LEVELS = [
+  { level: 0, label: "Thin", description: "Normal fluids" },
+  { level: 1, label: "Slightly thick", description: "Mildly thickened" },
+  { level: 2, label: "Mildly thick", description: "Nectar-like" },
+  { level: 3, label: "Moderately thick", description: "Liquidised" },
+  { level: 4, label: "Extremely thick / Puréed", description: "Smooth purée" },
+  { level: 5, label: "Minced & moist", description: "Small soft lumps" },
+  { level: 6, label: "Soft & bite-sized", description: "Tender pieces" },
+  { level: 7, label: "Regular / Easy to chew", description: "Normal foods" },
 ];
 
 function uid() {
@@ -43,6 +63,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
   const [householdName, setHouseholdName] = useState("");
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [editingMember, setEditingMember] = useState<FamilyMember | null>(null);
+  const [showAttendance, setShowAttendance] = useState(false);
   const [weeklyBudget, setWeeklyBudget] = useState(200);
   const [budgetFlexible, setBudgetFlexible] = useState(false);
 
@@ -53,21 +74,30 @@ export default function OnboardingFlow({ onComplete }: Props) {
       role: "adult",
       age: "",
       needs: [],
+      attendanceDays: [],
     };
     setEditingMember(m);
+    setShowAttendance(false);
     setStep("member-detail");
   };
 
   const saveMember = () => {
     if (!editingMember || !editingMember.name.trim()) return;
+    // Empty attendanceDays means "all 7 days" — normalise
+    const memberToSave: FamilyMember = {
+      ...editingMember,
+      attendanceDays: editingMember.attendanceDays?.length === 7
+        ? []
+        : editingMember.attendanceDays,
+    };
     setMembers((prev) => {
-      const idx = prev.findIndex((m) => m.id === editingMember.id);
+      const idx = prev.findIndex((m) => m.id === memberToSave.id);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = editingMember;
+        next[idx] = memberToSave;
         return next;
       }
-      return [...prev, editingMember];
+      return [...prev, memberToSave];
     });
     setEditingMember(null);
     setStep("members");
@@ -75,6 +105,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
 
   const editMember = (m: FamilyMember) => {
     setEditingMember({ ...m });
+    setShowAttendance((m.attendanceDays?.length ?? 0) > 0 && (m.attendanceDays?.length ?? 7) < 7);
     setStep("member-detail");
   };
 
@@ -82,14 +113,26 @@ export default function OnboardingFlow({ onComplete }: Props) {
     setMembers((prev) => prev.filter((m) => m.id !== id));
   };
 
+  const toggleAttendanceDay = (day: string) => {
+    if (!editingMember) return;
+    const current = editingMember.attendanceDays ?? WEEK_DAYS;
+    const next = current.includes(day)
+      ? current.filter((d) => d !== day)
+      : [...current, day];
+    setEditingMember({ ...editingMember, attendanceDays: next });
+  };
+
   const finish = () => {
     onComplete({
-      householdName: householdName || "Our Family",
+      householdName: householdName.trim() || "Our Family",
       members,
       weeklyBudget,
       budgetFlexible,
     });
   };
+
+  const hasComplexNeeds = (m: FamilyMember) =>
+    m.needs.some((n) => COMPLEX_NEEDS.includes(n));
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#faf8f4" }}>
@@ -119,17 +162,18 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 Step 1 of 3
               </p>
               <h2 className="text-3xl font-bold text-gray-900 leading-tight">
-                Let's set up<br />your family.
+                Let&apos;s set up<br />your family.
               </h2>
               <p className="mt-3 text-base" style={{ color: "#6b6b6b" }}>
-                This only takes a few minutes. We'll build a meal plan that works for everyone.
+                This only takes a few minutes. We&apos;ll build a meal plan that works for everyone.
               </p>
             </div>
 
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  What would you like to call your household? <span style={{ color: "#6b6b6b" }}>(optional)</span>
+                  What would you like to call your household?{" "}
+                  <span style={{ color: "#6b6b6b" }}>(optional)</span>
                 </label>
                 <input
                   type="text"
@@ -162,7 +206,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 Step 2 of 3
               </p>
               <h2 className="text-3xl font-bold text-gray-900 leading-tight">
-                Who's eating<br />with you?
+                Who&apos;s eating<br />with you?
               </h2>
               <p className="mt-3 text-base" style={{ color: "#6b6b6b" }}>
                 Add each person in your household. You can always change this later.
@@ -181,14 +225,16 @@ export default function OnboardingFlow({ onComplete }: Props) {
                     className="w-10 h-10 rounded-full flex items-center justify-center text-xl flex-none"
                     style={{ background: "#d4e9e2" }}
                   >
-                    {ROLES.find((r) => r.id === m.role)?.icon || "👤"}
+                    {ROLES.find((r) => r.id === m.role)?.icon ?? "👤"}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="font-semibold text-gray-900 truncate">{m.name}</p>
                     <p className="text-sm" style={{ color: "#6b6b6b" }}>
                       {m.role}
-                      {m.needs.length > 0 &&
-                        ` · ${m.needs.length} dietary need${m.needs.length !== 1 ? "s" : ""}`}
+                      {m.needs.filter((n) => n !== "none").length > 0 &&
+                        ` · ${m.needs.filter((n) => n !== "none").length} dietary need${m.needs.filter((n) => n !== "none").length !== 1 ? "s" : ""}`}
+                      {(m.attendanceDays?.length ?? 0) > 0 && (m.attendanceDays?.length ?? 7) < 7 &&
+                        ` · ${m.attendanceDays?.length ?? 0} days/week`}
                     </p>
                   </div>
                   <div className="flex gap-2 flex-none">
@@ -224,7 +270,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
               + Add a family member
             </button>
 
-            {members.length > 0 && (
+            {members.length > 0 ? (
               <button
                 onClick={() => setStep("budget")}
                 className="mt-6 w-full py-5 rounded-2xl text-white font-semibold text-base transition-all active:scale-95"
@@ -232,9 +278,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
               >
                 Continue →
               </button>
-            )}
-
-            {members.length === 0 && (
+            ) : (
               <p className="mt-4 text-center text-sm" style={{ color: "#6b6b6b" }}>
                 Add at least one person to continue.
               </p>
@@ -314,7 +358,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 <input
                   type="text"
                   placeholder="e.g. 8, 34, 72"
-                  value={editingMember.age || ""}
+                  value={editingMember.age ?? ""}
                   onChange={(e) =>
                     setEditingMember({ ...editingMember, age: e.target.value })
                   }
@@ -360,6 +404,155 @@ export default function OnboardingFlow({ onComplete }: Props) {
                   })}
                 </div>
               </div>
+
+              {/* IDDSI level selector — shown when texture-modified is selected */}
+              {editingMember.needs.includes("texturemodified") && (
+                <div
+                  className="rounded-2xl px-4 py-4"
+                  style={{ background: "#f0f6ff", border: "1px solid #b3cce8" }}
+                >
+                  <p className="text-sm font-medium mb-1" style={{ color: "#1a4a7a" }}>
+                    IDDSI texture level
+                    <span
+                      className="ml-2 text-xs px-2 py-0.5 rounded-full"
+                      style={{ background: "#b3cce8", color: "#1a4a7a" }}
+                    >
+                      Display only — Stage 1
+                    </span>
+                  </p>
+                  <p className="text-xs mb-3" style={{ color: "#2a5a8a" }}>
+                    Select the level recommended by a speech pathologist or dietitian. This is passed to the AI as a planning hint only &mdash; it does not replace professional assessment.
+                  </p>
+                  <div className="space-y-2">
+                    {IDDSI_LEVELS.map(({ level, label, description }) => {
+                      const selected = editingMember.iddsiLevel === level;
+                      return (
+                        <button
+                          key={level}
+                          onClick={() =>
+                            setEditingMember({
+                              ...editingMember,
+                              iddsiLevel: selected ? undefined : level,
+                            })
+                          }
+                          className="w-full flex items-center gap-3 px-3 py-3 rounded-xl border text-left transition-all"
+                          style={{
+                            background: selected ? "#1a4a7a" : "#ffffff",
+                            borderColor: selected ? "#1a4a7a" : "#b3cce8",
+                            color: selected ? "#ffffff" : "#1a1a1a",
+                          }}
+                        >
+                          <span
+                            className="text-sm font-bold flex-none w-5 text-center"
+                            style={{ color: selected ? "#9ac3e8" : "#1a4a7a" }}
+                          >
+                            {level}
+                          </span>
+                          <div>
+                            <p className="text-sm font-medium leading-tight">{label}</p>
+                            <p
+                              className="text-xs leading-tight"
+                              style={{ color: selected ? "rgba(255,255,255,0.7)" : "#6b6b6b" }}
+                            >
+                              {description}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Professional notes placeholder — display only in Stage 1 */}
+              {hasComplexNeeds(editingMember) && (
+                <div
+                  className="rounded-2xl px-4 py-4"
+                  style={{ background: "#faf0e0", border: "1px solid #e8d5a3" }}
+                >
+                  <p className="text-sm font-medium mb-1" style={{ color: "#7a5500" }}>
+                    Professional or clinician notes
+                    <span
+                      className="ml-2 text-xs px-2 py-0.5 rounded-full"
+                      style={{ background: "#e8d5a3", color: "#7a5500" }}
+                    >
+                      Display only
+                    </span>
+                  </p>
+                  <p className="text-xs mb-2" style={{ color: "#9a7020" }}>
+                    Add any notes from a dietitian, speech pathologist, or other professional.
+                    These are shown to the AI to help plan meals — they do not replace professional advice.
+                  </p>
+                  <textarea
+                    placeholder="e.g. IDDSI Level 4 minced & moist per SP review June 2025. Supplement: Fortisip Compact x1 with lunch."
+                    value={editingMember.professionalNotes ?? ""}
+                    onChange={(e) =>
+                      setEditingMember({ ...editingMember, professionalNotes: e.target.value })
+                    }
+                    rows={3}
+                    className="w-full px-3 py-3 rounded-xl border text-sm text-gray-900 outline-none resize-none"
+                    style={{ background: "#ffffff", borderColor: "#e8d5a3" }}
+                    onFocus={(e) => (e.target.style.borderColor = "#c4862a")}
+                    onBlur={(e) => (e.target.style.borderColor = "#e8d5a3")}
+                  />
+                </div>
+              )}
+
+              {/* Attendance days — show for complex needs or if user opts in */}
+              {(hasComplexNeeds(editingMember) || showAttendance) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Which days does {editingMember.name || "this person"} eat at home?
+                  </label>
+                  <p className="text-xs mb-3" style={{ color: "#6b6b6b" }}>
+                    Leave all selected if they eat at home every day.
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    {WEEK_DAYS.map((day, i) => {
+                      const currentDays = editingMember.attendanceDays ?? WEEK_DAYS;
+                      const active = currentDays.length === 0
+                        ? true
+                        : currentDays.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          onClick={() => {
+                            // If attendanceDays is empty (all days), expand to full list first
+                            if ((editingMember.attendanceDays ?? []).length === 0) {
+                              const withoutThis = WEEK_DAYS.filter((d) => d !== day);
+                              setEditingMember({ ...editingMember, attendanceDays: withoutThis });
+                            } else {
+                              toggleAttendanceDay(day);
+                            }
+                          }}
+                          className="px-3 py-2 rounded-xl border text-sm font-medium transition-all"
+                          style={{
+                            background: active ? "#1a6b55" : "#ffffff",
+                            color: active ? "#ffffff" : "#1a1a1a",
+                            borderColor: active ? "#1a6b55" : "#ddd6cc",
+                          }}
+                        >
+                          {DAY_SHORT[i]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Show attendance toggle for members without complex needs */}
+              {!hasComplexNeeds(editingMember) && !showAttendance && (
+                <button
+                  onClick={() => {
+                    setShowAttendance(true);
+                    setEditingMember({ ...editingMember, attendanceDays: [...WEEK_DAYS] });
+                  }}
+                  className="text-sm font-medium"
+                  style={{ color: "#1a6b55" }}
+                >
+                  + They don&apos;t eat at home every day
+                </button>
+              )}
             </div>
 
             <button
@@ -381,10 +574,10 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 Step 3 of 3
               </p>
               <h2 className="text-3xl font-bold text-gray-900 leading-tight">
-                What's your<br />weekly food budget?
+                What&apos;s your<br />weekly food budget?
               </h2>
               <p className="mt-3 text-base" style={{ color: "#6b6b6b" }}>
-                We use this to find the best value across stores. It's a guide — you can adjust anytime.
+                We use this to find the best value across stores. It&apos;s a guide — you can adjust anytime.
               </p>
             </div>
 
@@ -439,7 +632,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
               <div>
                 <p className="font-medium text-gray-900">This is flexible</p>
                 <p className="text-sm" style={{ color: "#6b6b6b" }}>
-                  Show me options outside this range if they're much better value
+                  Show me options outside this range if they&apos;re much better value
                 </p>
               </div>
             </button>
@@ -452,7 +645,7 @@ export default function OnboardingFlow({ onComplete }: Props) {
                 boxShadow: "0 4px 20px rgba(26,107,85,0.3)",
               }}
             >
-              Build my family's meal plan 🌿
+              Build my family&apos;s meal plan 🌿
             </button>
 
             <p className="text-center mt-4 text-sm" style={{ color: "#6b6b6b" }}>
