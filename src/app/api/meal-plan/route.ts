@@ -65,7 +65,7 @@ const MOCK_PLAN = {
     { store: "ALDI", items: 14, est: 38, savings: 12, keyItems: ["frozen veg", "wraps", "rice"] },
   ],
   weeklyTotal: 103,
-  nutritionHighlight: "Preview plan — add ANTHROPIC_API_KEY to .env.local for live AI-generated plans.",
+  nutritionHighlight: "Mock plan — set MOCK_MEAL_PLAN=true in .env.local to enable this mode, or leave unset for live AI.",
   planMeta: {
     planSource: "ai" as const,
     authorityLevel: "flexible" as const,
@@ -77,7 +77,7 @@ const MOCK_PLAN = {
 export async function POST(req: NextRequest) {
   const profile: FamilyProfile = await req.json();
 
-  if (process.env.MOCK_MEAL_PLAN === "true" || !process.env.ANTHROPIC_API_KEY) {
+  if (process.env.MOCK_MEAL_PLAN === "true") {
     return NextResponse.json(MOCK_PLAN);
   }
 
@@ -206,7 +206,8 @@ Respond ONLY with a valid JSON object in this exact structure (no markdown, no c
     const message = await client.messages.create({
       model: "claude-opus-4-8",
       max_tokens: 8000,
-      thinking: { type: "enabled", budget_tokens: 3000 },
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
       messages: [{ role: "user", content: prompt }],
     });
 
