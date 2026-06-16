@@ -170,7 +170,6 @@ export default function MealPlanView({ profile, onBack, initialSavedPlan = null 
   const [selectedDay, setSelectedDay] = useState(0);
   const [plan, setPlan] = useState<AIPlan | null>(null);
   const [savedPlans, setSavedPlans] = useState<SavedMealPlan[]>([]);
-  const [isNamingSave, setIsNamingSave] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -234,6 +233,12 @@ export default function MealPlanView({ profile, onBack, initialSavedPlan = null 
     setSavedPlans(loadSavedMealPlans());
   }, []);
 
+  useEffect(() => {
+    if (plan) {
+      setSaveName(`${profile.householdName || "Family"} plan`);
+    }
+  }, [plan, profile.householdName]);
+
   const toSavedDayNames = (days: DayPlan[]): SavedDayNames[] =>
     days.map((day) => ({
       day: day.day,
@@ -241,13 +246,6 @@ export default function MealPlanView({ profile, onBack, initialSavedPlan = null 
       lunch: day.lunch.name,
       dinner: day.dinner.name,
     }));
-
-  const startSave = () => {
-    if (!plan) return;
-    setSaveName(`${profile.householdName || "Family"} plan`);
-    setIsNamingSave(true);
-    setSaveNotice(null);
-  };
 
   const confirmSave = () => {
     if (!plan) return;
@@ -261,8 +259,6 @@ export default function MealPlanView({ profile, onBack, initialSavedPlan = null 
       days: toSavedDayNames(plan.days),
     });
     setSavedPlans(next);
-    setIsNamingSave(false);
-    setSaveName("");
     setSaveNotice(`Saved "${trimmedName}"`);
   };
 
@@ -323,43 +319,6 @@ export default function MealPlanView({ profile, onBack, initialSavedPlan = null 
             7-day plan
           </span>
         </div>
-        {plan && (
-          <div className="mb-4">
-            {!isNamingSave ? (
-              <button
-                onClick={startSave}
-                className="text-xs px-3 py-1.5 rounded-full font-semibold"
-                style={{ background: "rgba(255,255,255,0.2)", color: "#ffffff" }}
-              >
-                Save plan
-              </button>
-            ) : (
-              <div className="flex gap-2">
-                <input
-                  value={saveName}
-                  onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="Plan name"
-                  className="flex-1 px-3 py-2 rounded-lg text-sm text-gray-900"
-                />
-                <button
-                  onClick={confirmSave}
-                  disabled={!saveName.trim()}
-                  className="px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40"
-                  style={{ background: "#ffffff", color: "#1a6b55" }}
-                >
-                  Save
-                </button>
-                <button
-                  onClick={() => setIsNamingSave(false)}
-                  className="px-3 py-2 rounded-lg text-xs font-semibold"
-                  style={{ background: "rgba(255,255,255,0.15)", color: "#ffffff" }}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-        )}
         <h1 className="text-2xl font-bold text-white">
           {profile.householdName || "Your family"}
         </h1>
@@ -413,6 +372,40 @@ export default function MealPlanView({ profile, onBack, initialSavedPlan = null 
         {!loading && plan && (
 
           <>
+            <div
+              className="mb-5 rounded-2xl bg-white border px-4 py-4"
+              style={{ borderColor: "#e8e2d8" }}
+            >
+              <label
+                htmlFor="plan-name"
+                className="block text-sm font-semibold text-gray-900 mb-2"
+              >
+                Plan name
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="plan-name"
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder="e.g. Week of 17 June"
+                  className="flex-1 px-3 py-2.5 rounded-xl border text-sm text-gray-900"
+                  style={{ borderColor: "#e8e2d8" }}
+                />
+                <button
+                  onClick={confirmSave}
+                  disabled={!saveName.trim()}
+                  className="px-4 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-40"
+                  style={{ background: "#1a6b55" }}
+                >
+                  Save Plan
+                </button>
+              </div>
+              {saveNotice && (
+                <p className="mt-2 text-xs" style={{ color: "#1a6b55" }}>
+                  {saveNotice}
+                </p>
+              )}
+            </div>
             <details className="mb-5 rounded-2xl bg-white border border-[#e8e2d8]">
               <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-800">
                 Saved plans ({savedPlans.length})
