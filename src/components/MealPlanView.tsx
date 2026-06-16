@@ -2,6 +2,13 @@
 
 import { useState, useEffect } from "react";
 import type { FamilyProfile, PlanSource, AuthorityLevel } from "@/app/page";
+import {
+  deleteSavedMealPlan,
+  loadSavedMealPlans,
+  saveMealPlan,
+  type SavedDayNames,
+  type SavedMealPlan,
+} from "@/lib/savedMealPlans";
 
 type Props = {
   profile: FamilyProfile;
@@ -161,6 +168,10 @@ export default function MealPlanView({ profile, onBack }: Props) {
   const [tab, setTab] = useState<"meals" | "shopping">("meals");
   const [selectedDay, setSelectedDay] = useState(0);
   const [plan, setPlan] = useState<AIPlan | null>(null);
+  const [savedPlans, setSavedPlans] = useState<SavedMealPlan[]>([]);
+  const [isNamingSave, setIsNamingSave] = useState(false);
+  const [saveName, setSaveName] = useState("");
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -192,6 +203,65 @@ export default function MealPlanView({ profile, onBack }: Props) {
     void (async () => { await fetchPlan(); })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setSavedPlans(loadSavedMealPlans());
+  }, []);
+
+  const toSavedDayNames = (days: DayPlan[]): SavedDayNames[] =>
+    days.map((day) => ({
+      day: day.day,
+      breakfast: day.breakfast.name,
+      lunch: day.lunch.name,
+      dinner: day.dinner.name,
+    }));
+
+  const startSave = () => {
+    if (!plan) return;
+    setSaveName(`${profile.householdName || "Family"} plan`);
+    setIsNamingSave(true);
+    setSaveNotice(null);
+  };
+
+  const confirmSave = () => {
+    if (!plan) return;
+    const trimmedName = saveName.trim();
+    if (!trimmedName) return;
+    const next = saveMealPlan({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: trimmedName,
+      householdLabel: profile.householdName || "Our Family",
+      savedAt: new Date().toISOString(),
+      days: toSavedDayNames(plan.days),
+    });
+    setSavedPlans(next);
+    setIsNamingSave(false);
+    setSaveName("");
+    setSaveNotice(`Saved "${trimmedName}"`);
+  };
+
+  const loadSavedPlan = (saved: SavedMealPlan) => {
+    if (!plan) return;
+    const savedMap = new Map(saved.days.map((d) => [d.day, d]));
+    const nextDays = plan.days.map((day) => {
+      const savedDay = savedMap.get(day.day);
+      if (!savedDay) return day;
+      return {
+        ...day,
+        breakfast: { ...day.breakfast, name: savedDay.breakfast },
+        lunch: { ...day.lunch, name: savedDay.lunch },
+        dinner: { ...day.dinner, name: savedDay.dinner },
+      };
+    });
+    setPlan({ ...plan, days: nextDays });
+    setTab("meals");
+    setSelectedDay(0);
+    setSaveNotice(`Loaded "${saved.name}"`);
+  };
+
+  const removeSavedPlan = (id: string) => {
+    setSavedPlans(deleteSavedMealPlan(id));
+  };
 
   const totalSavings = plan?.shopping.reduce((acc: number, s: StoreEntry) => acc + s.savings, 0) ?? 0;
   const totalSpend = plan?.shopping.reduce((acc: number, s: StoreEntry) => acc + s.est, 0) ?? plan?.weeklyTotal ?? 0;
@@ -227,6 +297,43 @@ export default function MealPlanView({ profile, onBack }: Props) {
             7-day plan
           </span>
         </div>
+        {plan && (
+          <div className="mb-4">
+            {!isNamingSave ? (
+              <button
+                onClick={startSave}
+                className="text-xs px-3 py-1.5 rounded-full font-semibold"
+                style={{ background: "rgba(255,255,255,0.2)", color: "#ffffff" }}
+              >
+                Save plan
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  value={saveName}
+                  onChange={(e) => setSaveName(e.target.value)}
+                  placeholder="Plan name"
+                  className="flex-1 px-3 py-2 rounded-lg text-sm text-gray-900"
+                />
+                <button
+                  onClick={confirmSave}
+                  disabled={!saveName.trim()}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40"
+                  style={{ background: "#ffffff", color: "#1a6b55" }}
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => setIsNamingSave(false)}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold"
+                  style={{ background: "rgba(255,255,255,0.15)", color: "#ffffff" }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <h1 className="text-2xl font-bold text-white">
           {profile.householdName || "Your family"}
         </h1>
@@ -261,6 +368,11 @@ export default function MealPlanView({ profile, onBack }: Props) {
             </button>
           ))}
         </div>
+        {saveNotice && (
+          <p className="mt-3 text-xs" style={{ color: "rgba(255,255,255,0.82)" }}>
+            {saveNotice}
+          </p>
+        )}
       </div>
 
       {/* Content */}
@@ -275,6 +387,47 @@ export default function MealPlanView({ profile, onBack }: Props) {
         {!loading && plan && (
 
           <>
+            <details className="mb-5 rounded-2xl bg-white border border-[#e8e2d8]">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-800">
+                Saved plans ({savedPlans.length})
+              </summary>
+              <div className="px-4 pb-4 space-y-2">
+                {savedPlans.length === 0 ? (
+                  <p className="text-xs" style={{ color: "#6b6b6b" }}>
+                    No saved plans yet.
+                  </p>
+                ) : (
+                  savedPlans.map((saved) => (
+                    <div
+                      key={saved.id}
+                      className="rounded-xl border px-3 py-2 flex items-center gap-3"
+                      style={{ borderColor: "#e8e2d8" }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{saved.name}</p>
+                        <p className="text-xs" style={{ color: "#6b6b6b" }}>
+                          {new Date(saved.savedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => loadSavedPlan(saved)}
+                        className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                        style={{ background: "#d4e9e2", color: "#0d5c48" }}
+                      >
+                        Load
+                      </button>
+                      <button
+                        onClick={() => removeSavedPlan(saved.id)}
+                        className="text-xs px-3 py-1.5 rounded-lg font-medium"
+                        style={{ background: "#fde8e8", color: "#c0392b" }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </details>
             {/* MEALS TAB */}
             {tab === "meals" && (
               <div>
