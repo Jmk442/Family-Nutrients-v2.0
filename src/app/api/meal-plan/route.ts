@@ -74,11 +74,69 @@ const MOCK_PLAN = {
   },
 };
 
+async function callWithRetry<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delayMs = 1000
+): Promise<T> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      const isTransient = status !== undefined && [500, 502, 503, 529].includes(status);
+      if (attempt === retries - 1 || !isTransient) throw err;
+      await new Promise((r) => setTimeout(r, delayMs * Math.pow(2, attempt)));
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
+function extractJsonObject(text: string): string {
+  let cleaned = text
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    cleaned = cleaned.slice(start, end + 1);
+  }
+  return cleaned;
+}
+
+function parseMealPlanResponse(text: string): unknown {
+  const candidates = [
+    text,
+    extractJsonObject(text),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try next extraction strategy
+    }
+  }
+
+  throw new Error("JSON parse failed");
+}
+
 export async function POST(req: NextRequest) {
   const profile: FamilyProfile = await req.json();
 
-  if (process.env.MOCK_MEAL_PLAN === "true") {
+  if (process.env.MOCK_MEAL_PLAN === "true" || !process.env.ANTHROPIC_API_KEY) {
     return NextResponse.json(MOCK_PLAN);
+  }
+
+  if (!profile.members?.length) {
+    return NextResponse.json(
+      { error: "Add at least one family member in your profile before generating a meal plan." },
+      { status: 400 }
+    );
   }
 
   // Build per-member context including which dietary rules are safety-level
@@ -203,38 +261,77 @@ Respond ONLY with a valid JSON object in this exact structure (no markdown, no c
 }`;
 
   try {
-    const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 8000,
-      thinking: { type: "adaptive" },
-      output_config: { effort: "medium" },
-      messages: [{ role: "user", content: prompt }],
-    });
+    let lastRaw = "";
+    let plan: unknown;
+    const tokenLimits = [16000, 24000];
 
-    const textBlock = message.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json({ error: "No text response from AI" }, { status: 500 });
+    for (let attempt = 0; attempt < tokenLimits.length; attempt++) {
+      const maxTokens = tokenLimits[attempt];
+      const message = await callWithRetry(() =>
+        client.messages.create({
+          model: "claude-opus-4-8",
+          max_tokens: maxTokens,
+          thinking: { type: "adaptive" },
+          output_config: { effort: "medium" },
+          messages: [{ role: "user", content: prompt }],
+        })
+      );
+
+      const wasTruncated = message.stop_reason === "max_tokens";
+      if (wasTruncated) {
+        console.error(
+          "Meal plan response truncated at max_tokens",
+          maxTokens,
+          "on attempt",
+          attempt + 1
+        );
+      }
+
+      const textBlock = message.content.find((b) => b.type === "text");
+      if (!textBlock || textBlock.type !== "text") {
+        if (attempt === tokenLimits.length - 1) {
+          return NextResponse.json({ error: "No text response from AI" }, { status: 500 });
+        }
+        continue;
+      }
+
+      lastRaw = textBlock.text;
+      try {
+        plan = parseMealPlanResponse(lastRaw);
+        break;
+      } catch {
+        console.error(
+          "Meal plan JSON parse error on attempt",
+          attempt + 1,
+          wasTruncated ? "(truncated)" : "",
+          "tail:",
+          lastRaw.slice(-200)
+        );
+        if (attempt === tokenLimits.length - 1) {
+          return NextResponse.json(
+            {
+              error: wasTruncated
+                ? "Meal plan was too long and got cut off — please try again"
+                : "AI returned an unreadable format — please try again",
+            },
+            { status: 500 }
+          );
+        }
+      }
     }
 
-    const raw = textBlock.text
-      .trim()
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-
-    let plan: unknown;
-    try {
-      plan = JSON.parse(raw);
-    } catch {
-      console.error("Meal plan JSON parse error. Raw response:", raw.slice(0, 500));
-      return NextResponse.json({ error: "AI returned an unreadable format — please try again" }, { status: 500 });
+    if (!plan) {
+      return NextResponse.json(
+        { error: "AI returned an unreadable format — please try again" },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json(plan);
   } catch (err: unknown) {
+    const status = (err as { status?: number })?.status;
     const message = err instanceof Error ? err.message : "Unknown error";
-    console.error("Meal plan API error:", message);
+    console.error("Meal plan API error:", status, message);
     return NextResponse.json({ error: "Failed to generate meal plan. Please try again." }, { status: 500 });
   }
 }

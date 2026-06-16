@@ -5,6 +5,7 @@ import type { FamilyProfile, FamilyMember } from "@/app/page";
 
 type Props = {
   onComplete: (profile: FamilyProfile) => void;
+  initialProfile?: FamilyProfile | null;
 };
 
 const DIETARY_NEEDS = [
@@ -58,14 +59,14 @@ function uid() {
 
 type Step = "household" | "members" | "member-detail" | "budget" | "done";
 
-export default function OnboardingFlow({ onComplete }: Props) {
+export default function OnboardingFlow({ onComplete, initialProfile = null }: Props) {
   const [step, setStep] = useState<Step>("household");
-  const [householdName, setHouseholdName] = useState("");
-  const [members, setMembers] = useState<FamilyMember[]>([]);
+  const [householdName, setHouseholdName] = useState(initialProfile?.householdName ?? "");
+  const [members, setMembers] = useState<FamilyMember[]>(initialProfile?.members ?? []);
   const [editingMember, setEditingMember] = useState<FamilyMember | null>(null);
   const [showAttendance, setShowAttendance] = useState(false);
-  const [weeklyBudget, setWeeklyBudget] = useState(200);
-  const [budgetFlexible, setBudgetFlexible] = useState(false);
+  const [weeklyBudget, setWeeklyBudget] = useState(initialProfile?.weeklyBudget ?? 200);
+  const [budgetFlexible, setBudgetFlexible] = useState(initialProfile?.budgetFlexible ?? false);
 
   const addMember = () => {
     const m: FamilyMember = {

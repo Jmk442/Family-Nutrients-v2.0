@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import WelcomeScreen from "@/components/WelcomeScreen";
 import OnboardingFlow from "@/components/OnboardingFlow";
 import MealPlanView from "@/components/MealPlanView";
+import { loadFamilyProfile, saveFamilyProfile } from "@/lib/familyProfile";
 import { loadSavedMealPlans, type SavedMealPlan } from "@/lib/savedMealPlans";
 
 export type AppScreen = "welcome" | "onboarding" | "mealplan";
@@ -56,23 +57,43 @@ export default function Home() {
   const [screen, setScreen] = useState<AppScreen>("welcome");
   const [profile, setProfile] = useState<FamilyProfile | null>(null);
   const [savedPlans, setSavedPlans] = useState<SavedMealPlan[]>([]);
+  const [savedFamilyProfile, setSavedFamilyProfile] = useState<FamilyProfile | null>(null);
   const [selectedSavedPlan, setSelectedSavedPlan] = useState<SavedMealPlan | null>(null);
 
   useEffect(() => {
     if (screen === "welcome") {
       setSavedPlans(loadSavedMealPlans());
+      setSavedFamilyProfile(loadFamilyProfile());
     }
   }, [screen]);
 
-  const loadSavedFromHome = (saved: SavedMealPlan) => {
-    setProfile({
-      members: [],
-      weeklyBudget: 0,
-      budgetFlexible: false,
-      householdName: saved.householdLabel || "Saved Plan",
-    });
-    setSelectedSavedPlan(saved);
+  const goToMealPlan = (p: FamilyProfile, savedPlan: SavedMealPlan | null = null) => {
+    setProfile(p);
+    setSelectedSavedPlan(savedPlan);
     setScreen("mealplan");
+  };
+
+  const continueWithFamily = () => {
+    const family = loadFamilyProfile();
+    if (!family) return;
+    goToMealPlan(family);
+  };
+
+  const loadSavedFromHome = (saved: SavedMealPlan) => {
+    const family = loadFamilyProfile();
+    if (family) {
+      goToMealPlan(family, saved);
+      return;
+    }
+    goToMealPlan(
+      {
+        members: [],
+        weeklyBudget: 0,
+        budgetFlexible: false,
+        householdName: saved.householdLabel || "Saved Plan",
+      },
+      saved,
+    );
   };
 
   return (
@@ -80,16 +101,20 @@ export default function Home() {
       {screen === "welcome" && (
         <WelcomeScreen
           onStart={() => setScreen("onboarding")}
+          familyProfile={savedFamilyProfile}
+          onContinueWithFamily={continueWithFamily}
+          onEditFamily={() => setScreen("onboarding")}
           savedPlans={savedPlans}
           onLoadSavedPlan={loadSavedFromHome}
         />
       )}
       {screen === "onboarding" && (
         <OnboardingFlow
+          initialProfile={savedFamilyProfile ?? profile}
           onComplete={(p) => {
-            setProfile(p);
-            setSelectedSavedPlan(null);
-            setScreen("mealplan");
+            saveFamilyProfile(p);
+            setSavedFamilyProfile(p);
+            goToMealPlan(p);
           }}
         />
       )}
@@ -97,7 +122,7 @@ export default function Home() {
         <MealPlanView
           profile={profile}
           initialSavedPlan={selectedSavedPlan}
-          onBack={() => setScreen("onboarding")}
+          onBack={() => setScreen("welcome")}
         />
       )}
     </main>
