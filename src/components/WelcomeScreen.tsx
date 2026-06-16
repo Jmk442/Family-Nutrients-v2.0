@@ -1,10 +1,14 @@
 "use client";
 
+import type { SavedMealPlan } from "@/lib/savedMealPlans";
+
 type Props = {
   onStart: () => void;
+  savedPlans: SavedMealPlan[];
+  onLoadSavedPlan: (saved: SavedMealPlan) => void;
 };
 
-export default function WelcomeScreen({ onStart }: Props) {
+export default function WelcomeScreen({ onStart, savedPlans, onLoadSavedPlan }: Props) {
   return (
     <div
       className="min-h-screen flex flex-col"
@@ -81,6 +85,36 @@ export default function WelcomeScreen({ onStart }: Props) {
           >
             Takes about 3 minutes to set up your family
           </p>
+
+          <div
+            className="mt-6 rounded-2xl p-4"
+            style={{ background: "rgba(255,255,255,0.12)" }}
+          >
+            <p className="text-sm font-semibold text-white mb-2">
+              Saved plans ({savedPlans.length})
+            </p>
+            {savedPlans.length === 0 ? (
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.7)" }}>
+                No saved plans yet.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {savedPlans.slice(0, 4).map((saved) => (
+                  <button
+                    key={saved.id}
+                    onClick={() => onLoadSavedPlan(saved)}
+                    className="w-full text-left rounded-xl px-3 py-2 transition-all"
+                    style={{ background: "rgba(255,255,255,0.18)" }}
+                  >
+                    <p className="text-sm font-medium text-white truncate">{saved.name}</p>
+                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.7)" }}>
+                      {new Date(saved.savedAt).toLocaleDateString()}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

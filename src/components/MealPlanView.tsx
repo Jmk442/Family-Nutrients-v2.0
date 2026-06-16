@@ -13,6 +13,7 @@ import {
 type Props = {
   profile: FamilyProfile;
   onBack: () => void;
+  initialSavedPlan?: SavedMealPlan | null;
 };
 
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -164,7 +165,7 @@ function normaliseMemberVariants(meal: Meal): MemberVariant[] {
   return [];
 }
 
-export default function MealPlanView({ profile, onBack }: Props) {
+export default function MealPlanView({ profile, onBack, initialSavedPlan = null }: Props) {
   const [tab, setTab] = useState<"meals" | "shopping">("meals");
   const [selectedDay, setSelectedDay] = useState(0);
   const [plan, setPlan] = useState<AIPlan | null>(null);
@@ -197,12 +198,37 @@ export default function MealPlanView({ profile, onBack }: Props) {
     }
   };
 
+  const buildPlanFromSaved = (saved: SavedMealPlan): AIPlan => ({
+    days: saved.days.map((day) => ({
+      day: day.day,
+      breakfast: { name: day.breakfast, note: null, cost: 0, mealServingMode: "shared", memberVariants: [] },
+      lunch: { name: day.lunch, note: null, cost: 0, mealServingMode: "shared", memberVariants: [] },
+      dinner: { name: day.dinner, note: null, cost: 0, mealServingMode: "shared", memberVariants: [] },
+    })),
+    shopping: [],
+    weeklyTotal: 0,
+    nutritionHighlight: "Loaded saved plan names. Generate a new plan for full pricing and adaptations.",
+    planMeta: {
+      planSource: "manual",
+      authorityLevel: "flexible",
+      generatedAt: saved.savedAt,
+      auditTrail: ["Loaded from saved names on home screen"],
+    },
+  });
+
   // Load plan on mount. The IIFE keeps all setState calls inside async callbacks
   // so they never run synchronously within the effect body.
   useEffect(() => {
+    if (initialSavedPlan) {
+      setPlan(buildPlanFromSaved(initialSavedPlan));
+      setSaveNotice(`Loaded "${initialSavedPlan.name}"`);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     void (async () => { await fetchPlan(); })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialSavedPlan]);
 
   useEffect(() => {
     setSavedPlans(loadSavedMealPlans());

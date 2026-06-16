@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import WelcomeScreen from "@/components/WelcomeScreen";
 import OnboardingFlow from "@/components/OnboardingFlow";
 import MealPlanView from "@/components/MealPlanView";
+import { loadSavedMealPlans, type SavedMealPlan } from "@/lib/savedMealPlans";
 
 export type AppScreen = "welcome" | "onboarding" | "mealplan";
 
@@ -54,22 +55,50 @@ export type FamilyProfile = {
 export default function Home() {
   const [screen, setScreen] = useState<AppScreen>("welcome");
   const [profile, setProfile] = useState<FamilyProfile | null>(null);
+  const [savedPlans, setSavedPlans] = useState<SavedMealPlan[]>([]);
+  const [selectedSavedPlan, setSelectedSavedPlan] = useState<SavedMealPlan | null>(null);
+
+  useEffect(() => {
+    if (screen === "welcome") {
+      setSavedPlans(loadSavedMealPlans());
+    }
+  }, [screen]);
+
+  const loadSavedFromHome = (saved: SavedMealPlan) => {
+    setProfile({
+      members: [],
+      weeklyBudget: 0,
+      budgetFlexible: false,
+      householdName: saved.householdLabel || "Saved Plan",
+    });
+    setSelectedSavedPlan(saved);
+    setScreen("mealplan");
+  };
 
   return (
     <main className="min-h-screen" style={{ background: "#faf8f4" }}>
       {screen === "welcome" && (
-        <WelcomeScreen onStart={() => setScreen("onboarding")} />
+        <WelcomeScreen
+          onStart={() => setScreen("onboarding")}
+          savedPlans={savedPlans}
+          onLoadSavedPlan={loadSavedFromHome}
+        />
       )}
       {screen === "onboarding" && (
         <OnboardingFlow
           onComplete={(p) => {
             setProfile(p);
+            setSelectedSavedPlan(null);
             setScreen("mealplan");
           }}
         />
       )}
       {screen === "mealplan" && profile && (
-        <MealPlanView profile={profile} onBack={() => setScreen("onboarding")} />
+        <MealPlanView
+          profile={profile}
+          initialSavedPlan={selectedSavedPlan}
+          onBack={() => setScreen("onboarding")}
+        />
       )}
     </main>
   );
